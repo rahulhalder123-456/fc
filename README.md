@@ -135,6 +135,7 @@ Only assets actually built for their named target are published. The release wor
 - **Command not found after installation:** open a new terminal, or add `~/.local/bin` to PATH as printed by the installer.
 - **Release asset missing:** use the source installation fallback or wait for that platform asset to be published.
 - **Symbolic link rejected during compression:** archive the resolved target explicitly; links are excluded to keep cross-platform extraction predictable.
+- **GitHub Actions does not start:** the maintainer account currently returns `HTTP 422: Actions has been disabled for this user`. This is an account-side limitation, not a repository build failure; use the manual release scripts meanwhile.
 
 ## Contributing
 
