@@ -1,13 +1,11 @@
 [package]
 name = "fcz"
-version = "0.1.0"
+version = "1.0.1"
 edition = "2024"
 
 [dependencies]
 clap = { version = "4.6.6", features = ["derive"] }
-crossbeam-channel = "0.5.16"
 indicatif = "0.18.6"
-rayon = "1.12.0"
 tar = "0.4.46"
 walkdir = "2.5.0"
 zstd = { version = "0.13.3", features = ["zstdmt"] }

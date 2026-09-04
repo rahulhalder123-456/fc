@@ -1,15 +1,18 @@
 use clap::{Parser, Subcommand};
-use crossbeam_channel::bounded;
 use indicatif::{ProgressBar, ProgressStyle};
-use rayon::prelude::*;
-use std::fs::File;
-use std::io::{self, BufReader, BufWriter};
-use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::collections::HashSet;
+use std::error::Error;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, BufReader, BufWriter, Write};
+use std::path::{Component, Path, PathBuf};
+use std::process::ExitCode;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use walkdir::WalkDir;
 
+type Result<T> = std::result::Result<T, Box<dyn Error>>;
+
 #[derive(Parser)]
-#[command(author, version, about, long_about = None)]
+#[command(author, version, about = "Fast local compression with Zstandard", long_about = None)]
 #[command(propagate_version = true)]
 struct Cli {
     #[command(subcommand)]
@@ -20,253 +23,453 @@ struct Cli {
 enum Commands {
     /// Compress a file or directory
     Compress {
-        /// Path to the input file or directory
+        /// Input file or directory
         input: PathBuf,
-        /// Path to the output compressed file
+        /// Output path (defaults to INPUT.zst or INPUT.tar.zst)
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
-    /// Decompress a file
+    /// Decompress a .zst file or extract a .tar.zst archive
     Decompress {
-        /// Path to the input compressed file
+        /// Input archive
         input: PathBuf,
-        /// Path to the output decompressed file or directory
+        /// Output file or directory
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
 }
 
-enum EntryMsg {
-    Dir {
-        full_path: PathBuf,
-        rel_path: PathBuf,
-    },
-    FileBuf {
-        rel_path: PathBuf,
-        metadata: std::fs::Metadata,
-        data: Vec<u8>,
-    },
-    FileStream {
-        full_path: PathBuf,
-        rel_path: PathBuf,
-    },
+fn main() -> ExitCode {
+    match run(Cli::parse()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("Error: {error}");
+            ExitCode::FAILURE
+        }
+    }
 }
 
-fn main() -> io::Result<()> {
-    let cli = Cli::parse();
-
+fn run(cli: Cli) -> Result<()> {
     match cli.command {
-        Commands::Compress { input, output } => {
-            let input = std::fs::canonicalize(&input).unwrap_or(input.clone());
-            let metadata = std::fs::metadata(&input)?;
-            let is_dir = metadata.is_dir();
+        Commands::Compress { input, output } => compress(&input, output.as_deref()),
+        Commands::Decompress { input, output } => decompress(&input, output.as_deref()),
+    }
+}
 
-            let output_path = output.unwrap_or_else(|| {
-                let mut path = input.clone();
-                let file_name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
-                let new_file_name = if is_dir {
-                    format!("{}.tar.zst", file_name)
-                } else {
-                    format!("{}.zst", file_name)
-                };
-                path.set_file_name(new_file_name);
-                path
-            });
+fn compress(input: &Path, output: Option<&Path>) -> Result<()> {
+    let input = fs::canonicalize(input)
+        .map_err(|error| format!("cannot access input '{}': {error}", input.display()))?;
+    let metadata = fs::metadata(&input)?;
+    if !metadata.is_file() && !metadata.is_dir() {
+        return Err(format!(
+            "input '{}' is not a regular file or directory",
+            input.display()
+        )
+        .into());
+    }
 
-            let threads = std::thread::available_parallelism().map(|n| n.get()).unwrap_or(1);
-            let level = 1;
+    let output_path = absolute_output_path(
+        output
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| default_compressed_path(&input, metadata.is_dir())),
+    )?;
+    refuse_existing_output(&output_path)?;
+    if metadata.is_dir() && output_path.starts_with(&input) {
+        return Err("output archive must be outside the input directory".into());
+    }
 
-            println!("Auto-detecting optimal settings...");
-            println!("- Cores detected: {} -> Using maximum parallel threading", threads);
-            println!("- Zstd Level: {} -> Optimized for extremely fast compression", level);
+    let threads = std::thread::available_parallelism().map_or(1, |value| value.get());
+    println!("Cores detected: {threads}");
+    println!("Zstd level: 1 (high-speed mode)");
+    println!(
+        "Compressing: {} -> {}",
+        input.display(),
+        output_path.display()
+    );
+    let start = Instant::now();
 
-            let type_str = if is_dir { "directory" } else { "file" };
-            println!("Compressing {}: {} -> {}", type_str, input.display(), output_path.display());
-            
-            let start = Instant::now();
+    let result = (|| -> Result<()> {
+        let output_file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&output_path)?;
+        let writer = BufWriter::new(output_file);
+        let mut encoder = zstd::stream::Encoder::new(writer, 1)?;
+        encoder.multithread(0)?;
+        encoder.long_distance_matching(true)?;
 
-            let output_file = File::create(&output_path)?;
-            let writer = BufWriter::new(output_file);
-            let mut encoder = zstd::stream::Encoder::new(writer, level)?;
-            encoder.multithread(0)?;
-            encoder.long_distance_matching(true)?;
-
-            if is_dir {
-                let base_path = input.parent().unwrap_or(std::path::Path::new("")).to_path_buf();
-                
-                let spinner = ProgressBar::new_spinner();
-                spinner.set_style(ProgressStyle::default_spinner()
-                    .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ")
-                    .template("{spinner:.green} {msg}")
-                    .unwrap());
-                spinner.enable_steady_tick(Duration::from_millis(100));
-                spinner.set_message("Scanning directory tree...");
-
-                let mut entries: Vec<_> = WalkDir::new(&input)
-                    .into_iter()
-                    .filter_map(|e| e.ok())
-                    .collect();
-                
-                // Sort entries alphabetically (found to be best for node_modules locality)
-                entries.sort_by(|a, b| a.path().cmp(b.path()));
-                
-                spinner.finish_with_message(format!("Found {} items.", entries.len()));
-
-                let pb = ProgressBar::new(entries.len() as u64);
-                pb.set_style(ProgressStyle::default_bar()
-                    .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} ({eta}) {msg}")
-                    .unwrap()
-                    .progress_chars("#>-"));
-
-                // (tx, rx) bounded queue
-                let (tx, rx) = bounded::<EntryMsg>(100);
-                let pb_clone = pb.clone();
-
-                let writer_thread = std::thread::spawn(move || -> io::Result<()> {
-                    let mut builder = tar::Builder::new(encoder);
-                    
-                    for msg in rx {
-                        match msg {
-                            EntryMsg::Dir { full_path, rel_path } => {
-                                builder.append_dir(&rel_path, &full_path)?;
-                            }
-                            EntryMsg::FileBuf { rel_path, metadata, data } => {
-                                let mut header = tar::Header::new_gnu();
-                                #[allow(unused_must_use)]
-                                {
-                                    header.set_metadata_in_mode(&metadata, tar::HeaderMode::Complete);
-                                }
-                                header.set_size(data.len() as u64);
-                                header.set_cksum();
-                                builder.append_data(&mut header, &rel_path, data.as_slice())?;
-                            }
-                            EntryMsg::FileStream { full_path, rel_path } => {
-                                let mut file = File::open(&full_path)?;
-                                builder.append_file(&rel_path, &mut file)?;
-                            }
-                        }
-                        pb_clone.inc(1);
-                    }
-                    
-                    let encoder = builder.into_inner()?;
-                    encoder.finish()?;
-                    Ok(())
-                });
-
-                // Chunked processing: Process 500 files at a time to preserve absolute alphabetical order
-                for chunk in entries.chunks(500) {
-                    // Read the 500 files into memory in parallel
-                    let processed_chunk: Vec<Option<EntryMsg>> = chunk.par_iter().map(|entry| {
-                        let full_path = entry.path().to_path_buf();
-                        let rel_path = full_path.strip_prefix(&base_path).unwrap_or(&full_path).to_path_buf();
-                        
-                        if let Ok(metadata) = entry.metadata() {
-                            if metadata.is_dir() {
-                                Some(EntryMsg::Dir { full_path, rel_path })
-                            } else if metadata.is_file() {
-                                let size = metadata.len();
-                                if size < 50 * 1024 * 1024 {
-                                    if let Ok(data) = std::fs::read(&full_path) {
-                                        Some(EntryMsg::FileBuf { rel_path, metadata, data })
-                                    } else {
-                                        Some(EntryMsg::FileStream { full_path, rel_path })
-                                    }
-                                } else {
-                                    Some(EntryMsg::FileStream { full_path, rel_path })
-                                }
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    }).collect();
-
-                    // Send the processed files sequentially into the tar channel to guarantee order
-                    for msg in processed_chunk.into_iter().flatten() {
-                        tx.send(msg).unwrap();
-                    }
-                }
-
-                drop(tx);
-                writer_thread.join().expect("Writer thread panicked")?;
-                pb.finish_with_message("Compression complete");
-
-                let duration = start.elapsed();
-                let output_metadata = std::fs::metadata(&output_path)?;
-                println!(
-                    "Successfully compressed directory in {:.2?}. Output Size: {} bytes",
-                    duration,
-                    output_metadata.len()
-                );
-            } else {
-                let input_file = File::open(&input)?;
-                let mut reader = BufReader::new(input_file);
-                io::copy(&mut reader, &mut encoder)?;
-                encoder.finish()?;
-                
-                let duration = start.elapsed();
-                let output_metadata = std::fs::metadata(&output_path)?;
-                let ratio = if metadata.len() > 0 {
-                    output_metadata.len() as f64 / metadata.len() as f64 * 100.0
-                } else {
-                    0.0
-                };
-                println!(
-                    "Successfully compressed file in {:.2?}. Size: {} bytes -> {} bytes ({:.1}% of original size)",
-                    duration,
-                    metadata.len(),
-                    output_metadata.len(),
-                    ratio
-                );
-            }
+        if metadata.is_dir() {
+            append_directory(&mut encoder, &input)?;
+        } else {
+            let mut reader = BufReader::new(File::open(&input)?);
+            io::copy(&mut reader, &mut encoder)?;
         }
-        Commands::Decompress { input, output } => {
-            let is_tar = input.file_name().unwrap_or_default().to_string_lossy().ends_with(".tar.zst");
+        encoder.finish()?.flush()?;
+        Ok(())
+    })();
 
-            let output_path = output.clone().unwrap_or_else(|| {
-                let mut path = input.clone();
-                let file_name = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
-                if is_tar {
-                    if file_name.len() > 8 {
-                        path.set_file_name(&file_name[..file_name.len() - 8]);
-                    } else {
-                        path.set_file_name(format!("{}.dec", file_name));
-                    }
-                } else if file_name.ends_with(".zst") {
-                    path.set_file_name(&file_name[..file_name.len() - 4]);
-                } else {
-                    path.set_file_name(format!("{}.dec", file_name));
-                }
-                path
-            });
+    if let Err(error) = result {
+        let _ = fs::remove_file(&output_path);
+        return Err(error);
+    }
 
-            println!("Decompressing: {} -> {}", input.display(), output_path.display());
-            let start = Instant::now();
+    let output_size = fs::metadata(&output_path)?.len();
+    println!("Completed in {:.2?}", start.elapsed());
+    println!("Output: {} ({output_size} bytes)", output_path.display());
+    Ok(())
+}
 
-            let input_file = File::open(&input)?;
-            let reader = BufReader::new(input_file);
+fn append_directory<W: Write>(
+    encoder: &mut zstd::stream::Encoder<'_, W>,
+    input: &Path,
+) -> Result<()> {
+    let spinner = ProgressBar::new_spinner();
+    spinner.set_style(
+        ProgressStyle::default_spinner()
+            .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ")
+            .template("{spinner:.green} {msg}")?,
+    );
+    spinner.enable_steady_tick(Duration::from_millis(100));
+    spinner.set_message("Scanning directory tree...");
+
+    let mut entries = WalkDir::new(input)
+        .follow_links(false)
+        .into_iter()
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    entries.sort_by(|left, right| left.path().cmp(right.path()));
+    entries.retain(|entry| entry.path() != input);
+    spinner.finish_with_message(format!("Found {} items", entries.len()));
+
+    let progress = ProgressBar::new(entries.len() as u64);
+    progress.set_style(
+        ProgressStyle::default_bar()
+            .template(
+                "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} {msg}",
+            )?
+            .progress_chars("#>-"),
+    );
+
+    let mut archive = tar::Builder::new(encoder);
+    for entry in entries {
+        let path = entry.path();
+        let relative = path.strip_prefix(input)?;
+        let file_type = entry.file_type();
+        if file_type.is_symlink() {
+            return Err(format!("symbolic links are not supported: {}", path.display()).into());
+        }
+        if file_type.is_dir() {
+            archive.append_dir(relative, path)?;
+        } else if file_type.is_file() {
+            let mut file = File::open(path)?;
+            archive.append_file(relative, &mut file)?;
+        } else {
+            return Err(format!("unsupported filesystem entry: {}", path.display()).into());
+        }
+        progress.inc(1);
+    }
+    archive.finish()?;
+    progress.finish_with_message("Compression complete");
+    Ok(())
+}
+
+fn decompress(input: &Path, output: Option<&Path>) -> Result<()> {
+    let input = fs::canonicalize(input)
+        .map_err(|error| format!("cannot access archive '{}': {error}", input.display()))?;
+    if !fs::metadata(&input)?.is_file() {
+        return Err(format!("archive '{}' is not a regular file", input.display()).into());
+    }
+
+    let is_tar = input
+        .file_name()
+        .is_some_and(|name| name.to_string_lossy().ends_with(".tar.zst"));
+    let output_path = absolute_output_path(
+        output
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| default_decompressed_path(&input, is_tar)),
+    )?;
+    refuse_existing_output(&output_path)?;
+    println!(
+        "Decompressing: {} -> {}",
+        input.display(),
+        output_path.display()
+    );
+    let start = Instant::now();
+
+    if is_tar {
+        extract_archive_safely(&input, &output_path)?;
+    } else {
+        let result = (|| -> Result<()> {
+            let reader = BufReader::new(File::open(&input)?);
             let mut decoder = zstd::stream::Decoder::new(reader)?;
-
-            if is_tar {
-                let extract_dir = if output.is_some() {
-                    output_path.clone()
-                } else {
-                    input.parent().unwrap_or(std::path::Path::new("")).to_path_buf()
-                };
-                let mut archive = tar::Archive::new(decoder);
-                archive.unpack(&extract_dir)?;
-            } else {
-                let output_file = File::create(&output_path)?;
-                let mut writer = BufWriter::new(output_file);
-                io::copy(&mut decoder, &mut writer)?;
-                drop(writer);
-            }
-
-            let duration = start.elapsed();
-            println!("Successfully decompressed in {:.2?}.", duration);
+            let file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&output_path)?;
+            let mut writer = BufWriter::new(file);
+            io::copy(&mut decoder, &mut writer)?;
+            writer.flush()?;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            let _ = fs::remove_file(&output_path);
+            return Err(error);
         }
     }
 
+    println!("Completed in {:.2?}", start.elapsed());
+    println!("Output: {}", output_path.display());
     Ok(())
+}
+
+fn extract_archive_safely(input: &Path, output: &Path) -> Result<()> {
+    let partial = partial_directory(output)?;
+    fs::create_dir(&partial)?;
+    let result = (|| -> Result<()> {
+        let reader = BufReader::new(File::open(input)?);
+        let decoder = zstd::stream::Decoder::new(reader)?;
+        let mut archive = tar::Archive::new(decoder);
+        let mut seen = HashSet::new();
+
+        for entry in archive.entries()? {
+            let mut entry = entry?;
+            let relative = entry.path()?.into_owned();
+            validate_archive_path(&relative)?;
+            if !seen.insert(relative.clone()) {
+                return Err(
+                    format!("archive contains duplicate path: {}", relative.display()).into(),
+                );
+            }
+            let entry_type = entry.header().entry_type();
+            if !entry_type.is_file() && !entry_type.is_dir() {
+                return Err(format!(
+                    "archive contains unsupported link or entry: {}",
+                    relative.display()
+                )
+                .into());
+            }
+            if !entry.unpack_in(&partial)? {
+                return Err(format!("unsafe archive path rejected: {}", relative.display()).into());
+            }
+        }
+        Ok(())
+    })();
+
+    if let Err(error) = result {
+        let _ = fs::remove_dir_all(&partial);
+        return Err(error);
+    }
+    fs::rename(&partial, output).map_err(|error| {
+        let _ = fs::remove_dir_all(&partial);
+        format!(
+            "cannot finalize output directory '{}': {error}",
+            output.display()
+        )
+        .into()
+    })
+}
+
+fn validate_archive_path(path: &Path) -> Result<()> {
+    if path.as_os_str().is_empty()
+        || path
+            .components()
+            .any(|component| !matches!(component, Component::Normal(_) | Component::CurDir))
+    {
+        return Err(format!("unsafe archive path: {}", path.display()).into());
+    }
+    Ok(())
+}
+
+fn refuse_existing_output(path: &Path) -> Result<()> {
+    if path.exists() {
+        return Err(format!("output already exists: {}", path.display()).into());
+    }
+    if let Some(parent) = path.parent()
+        && !parent.exists()
+    {
+        fs::create_dir_all(parent)?;
+    }
+    Ok(())
+}
+
+fn absolute_output_path(path: PathBuf) -> Result<PathBuf> {
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Ok(std::env::current_dir()?.join(path))
+    }
+}
+
+fn default_compressed_path(input: &Path, is_dir: bool) -> PathBuf {
+    let mut path = input.to_path_buf();
+    let name = input.file_name().unwrap_or_default().to_string_lossy();
+    path.set_file_name(if is_dir {
+        format!("{name}.tar.zst")
+    } else {
+        format!("{name}.zst")
+    });
+    path
+}
+
+fn default_decompressed_path(input: &Path, is_tar: bool) -> PathBuf {
+    let mut path = input.to_path_buf();
+    let name = input.file_name().unwrap_or_default().to_string_lossy();
+    let trimmed = if is_tar {
+        name.strip_suffix(".tar.zst")
+    } else {
+        name.strip_suffix(".zst")
+    };
+    path.set_file_name(
+        trimmed
+            .filter(|value| !value.is_empty())
+            .unwrap_or("output"),
+    );
+    path
+}
+
+fn partial_directory(output: &Path) -> Result<PathBuf> {
+    let parent = output.parent().unwrap_or_else(|| Path::new("."));
+    let name = output.file_name().unwrap_or_default().to_string_lossy();
+    let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    let path = parent.join(format!(
+        ".{name}.fcz-partial-{}-{nonce}",
+        std::process::id()
+    ));
+    if path.exists() {
+        return Err("temporary extraction path already exists".into());
+    }
+    Ok(path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+
+    fn test_dir(label: &str) -> PathBuf {
+        let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!("fcz-{label}-{}-{id}", std::process::id()))
+    }
+
+    fn assert_trees_equal(left: &Path, right: &Path) {
+        let collect = |root: &Path| {
+            let mut paths: Vec<_> = WalkDir::new(root)
+                .into_iter()
+                .map(|entry| entry.unwrap())
+                .filter(|entry| entry.path() != root)
+                .map(|entry| entry.path().strip_prefix(root).unwrap().to_path_buf())
+                .collect();
+            paths.sort();
+            paths
+        };
+        let left_paths = collect(left);
+        let right_paths = collect(right);
+        assert_eq!(left_paths, right_paths);
+        for path in left_paths {
+            let left_path = left.join(&path);
+            let right_path = right.join(&path);
+            if left_path.is_file() {
+                assert_eq!(fs::read(left_path).unwrap(), fs::read(right_path).unwrap());
+            } else {
+                assert!(right_path.is_dir());
+            }
+        }
+    }
+
+    #[test]
+    fn directory_round_trip_preserves_names_and_bytes() {
+        let root = test_dir("round-trip");
+        let source = root.join("source with spaces");
+        fs::create_dir_all(source.join("nested/empty-dir")).unwrap();
+        fs::write(source.join("empty.txt"), []).unwrap();
+        fs::write(source.join("nested/hello.txt"), b"hello\0world").unwrap();
+        fs::write(
+            source.join("nested/こんにちは.txt"),
+            "Unicode contents".as_bytes(),
+        )
+        .unwrap();
+        fs::write(source.join("large-ish.bin"), vec![0xA5; 2 * 1024 * 1024]).unwrap();
+        let archive = root.join("archive.tar.zst");
+        let restored = root.join("restored output");
+
+        compress(&source, Some(&archive)).unwrap();
+        decompress(&archive, Some(&restored)).unwrap();
+        assert_trees_equal(&source, &restored);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn file_round_trip_preserves_bytes() {
+        let root = test_dir("file");
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("data file.bin");
+        let archive = root.join("data.zst");
+        let restored = root.join("restored.bin");
+        fs::write(
+            &source,
+            (0..=255).cycle().take(1024 * 1024).collect::<Vec<_>>(),
+        )
+        .unwrap();
+        compress(&source, Some(&archive)).unwrap();
+        decompress(&archive, Some(&restored)).unwrap();
+        assert_eq!(fs::read(source).unwrap(), fs::read(restored).unwrap());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn refuses_to_overwrite_output() {
+        let root = test_dir("overwrite");
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("input.txt");
+        let output = root.join("existing.zst");
+        fs::write(&source, b"input").unwrap();
+        fs::write(&output, b"keep me").unwrap();
+        assert!(
+            compress(&source, Some(&output))
+                .unwrap_err()
+                .to_string()
+                .contains("already exists")
+        );
+        assert_eq!(fs::read(output).unwrap(), b"keep me");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_unsafe_archive_paths() {
+        for path in [
+            Path::new("../outside"),
+            Path::new("/absolute"),
+            Path::new("a/../../outside"),
+        ] {
+            assert!(validate_archive_path(path).is_err());
+        }
+        #[cfg(windows)]
+        assert!(validate_archive_path(Path::new("C:\\outside")).is_err());
+        assert!(validate_archive_path(Path::new("nested/file.txt")).is_ok());
+    }
+
+    #[test]
+    fn rejects_archive_links() {
+        let root = test_dir("link");
+        fs::create_dir_all(&root).unwrap();
+        let archive_path = root.join("link.tar.zst");
+        let writer = File::create(&archive_path).unwrap();
+        let encoder = zstd::stream::Encoder::new(writer, 1).unwrap();
+        let mut archive = tar::Builder::new(encoder);
+        let mut header = tar::Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Symlink);
+        header.set_size(0);
+        header.set_mode(0o777);
+        header.set_cksum();
+        archive
+            .append_link(&mut header, "link", "../outside")
+            .unwrap();
+        let encoder = archive.into_inner().unwrap();
+        encoder.finish().unwrap();
+        let output = root.join("output");
+        assert!(decompress(&archive_path, Some(&output)).is_err());
+        assert!(!output.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
 }

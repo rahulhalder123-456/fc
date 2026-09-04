@@ -1,91 +1,155 @@
-<div align="center">
-  <h1>⚡ fcz (Fast Compressor)</h1>
-  <p><strong>A blazingly fast, multithreaded directory compressor written in Rust.</strong></p>
-  
-  [![Written in Rust](https://img.shields.io/badge/Language-Rust-orange.svg?style=flat-square&logo=rust)](https://www.rust-lang.org/)
-  [![Powered by Zstandard](https://img.shields.io/badge/Engine-Zstandard-blue.svg?style=flat-square)](https://facebook.github.io/zstd/)
-  [![License](https://img.shields.io/badge/License-MIT-green.svg?style=flat-square)](#license)
-</div>
+# fcz
 
----
+`fcz` is a cross-platform command-line tool for compressing files and directories with Zstandard. Directory archives use the standard tar format inside a `.tar.zst` stream.
 
-`fcz` is an insanely fast, memory-safe, multithreaded archiving tool designed to solve a single problem: **Compressing massive directories (like heavily populated `node_modules` folders) as fast as physically possible.**
+`fcz` is free and open source. It runs locally and does not require an account, API key, subscription, telemetry service, or cloud service.
 
-Built on top of Facebook's **Zstandard (zstd)** engine and utilizing **Long Distance Matching (LDM)**, `fcz` can cross-reference gigabytes of dependencies to instantly deduplicate identical packages across entire project trees.
+## Why fcz
 
-## 🚀 The Benchmark
+- One command for files or complete directory trees
+- Zstandard level 1 and multithreaded compression for high-speed local archiving
+- Bounded memory use: file contents are streamed into the archive
+- Clear output paths and errors
+- Existing outputs are never overwritten silently
+- Safe directory extraction rejects traversal paths, links, and duplicate entries
 
-We tested `fcz` on a massive enterprise monorepo containing over **30,000 files** and **3.4 GB** of data.
+## Benchmark
 
-| Tool | Architecture | Output Size | Time Taken |
-|------|-------------|-------------|------------|
-| **Standard ZIP** | Single-threaded | ~3.4 GB | 3+ Minutes |
-| **fcz (v4)** | 16-Core Zstd + LDM | **1.83 GB** | **52 Seconds** 🔥 |
+One measured Windows test produced the following result. It represents one machine and one workload, not universal performance.
 
-**100GB Virtual Benchmark:** Because `fcz` removes the CPU bottleneck and scales linearly across cores, compressing a single 100 GB file (like a SQL dump) on a modern NVMe SSD takes **under 45 seconds** (crunching at ~4.5 GB/s).
+| Item | Measured value |
+| --- | ---: |
+| Input directory | 14.0 GB |
+| Files | 28,752 |
+| Folders | 4,497 |
+| Total items reported | 33,250 |
+| Logical CPU cores detected by `fcz` | 16 |
+| Compression mode | Zstd level 1 |
+| Elapsed time | 48.63 seconds |
+| Output archive | 1,828,956,895 bytes (about 1.70 GiB) |
 
-## ✨ Features
+Command used:
 
-- **Blazing Fast I/O:** Uses Rayon for chunked, lock-free parallel file processing.
-- **Long Distance Matching (LDM):** Uses a 128MB+ rolling window to perfectly deduplicate identical code across thousands of separate files.
-- **Zero Configuration:** Automatically detects your CPU cores and optimizes threading settings instantly.
-- **Beautiful UI:** Features `uv`-style live progress bars and ETA using the `indicatif` library.
-- **Memory Safe:** Prevents RAM exhaustion by intelligently streaming files larger than 50MB sequentially, while bulk-loading tiny files into memory concurrently.
-
-## 📦 Installation
-
-Just like `uv`, `fcz` can be installed natively from pre-compiled binaries in seconds without needing Rust!
-
-**macOS and Linux:**
-```bash
-curl -LsSf https://raw.githubusercontent.com/rahulhalder123-456/fc/master/install.sh | sh
-```
-
-**Windows (PowerShell):**
 ```powershell
-powershell -c "irm https://raw.githubusercontent.com/rahulhalder123-456/fc/master/install.ps1 | iex"
+fcz compress "C:\Users\Rahul Halder\Desktop\ty-backend"
 ```
 
-*(If you prefer to compile from source, you can still run `cargo install --git https://github.com/rahulhalder123-456/fc.git`)*
+Output: `ty-backend.tar.zst`
 
-## 🛠️ Usage
+Using the reported 14.0 GB input size, this is approximately **288 MB/s**, a **13.1% archive-to-input ratio**, or an **86.9% size reduction**. These derived figures are approximate because the input size was rounded.
 
-`fcz` was built to be completely frictionless. Just point it at a directory and watch it fly.
+### Methodology and limitations
 
-### Compress a Directory
-```bash
-fcz compress /path/to/directory
-```
-*This will automatically scan, compress, and output a highly optimized `/path/to/directory.tar.zst` file next to the input.*
+Record the `fcz` version, exact command, input byte count, item counts, archive byte count, and wall-clock duration. Results vary with CPU, SSD/storage speed, file count, file sizes, compressibility, filesystem, operating system, and compression level. No ZIP or 7-Zip comparison is claimed without running those tools against the same input under the same conditions.
 
-### Decompress an Archive
-```bash
-fcz decompress /path/to/archive.tar.zst
-```
-*Extracts the entire massive archive back to its original state instantly.*
+## Installation
 
----
+Prebuilt installers fetch the latest compatible asset from [GitHub Releases](https://github.com/rahulhalder123-456/fc/releases). They install per-user and do not require Rust or administrator privileges. A platform installer reports a clear error when its release asset has not yet been published.
 
-## 🗑️ Uninstallation
-To completely remove `fcz` from your system, delete the executable from your `PATH`.
-If you installed it using our scripts or Cargo, run:
-```bash
-# macOS / Linux
-rm ~/.cargo/bin/fcz
+### Windows x86_64
 
-# Windows (PowerShell)
-Remove-Item -Path "$env:USERPROFILE\.cargo\bin\fcz.exe"
+```powershell
+irm https://raw.githubusercontent.com/rahulhalder123-456/fc/master/install.ps1 | iex
 ```
 
----
+Installs `fcz.exe` to `%USERPROFILE%\.local\bin` and adds that directory to the user PATH when needed.
 
-## 🏗️ Architecture Deep Dive
+### Linux / WSL x86_64
 
-Why is `fcz` so much faster and smaller than traditional archiving tools?
+```sh
+curl -fsSL https://raw.githubusercontent.com/rahulhalder123-456/fc/master/install.sh | sh
+```
 
-1. **Alphabetical Locality:** By sorting the directory traversal alphabetically by absolute path, `fcz` naturally groups files within the same package/module together. 
-2. **Zstd LDM Engine:** When fed into the Zstandard compressor, Long Distance Matching allows the algorithm to look backward by over 128 Megabytes. Since `node_modules` folders often contain hundreds of identical dependency versions, `fcz` deduplicates them seamlessly on the fly.
-3. **M:N Producer-Consumer Channels:** The disk I/O happens in a massive parallel thread pool, which sends raw buffers over bounded Crossbeam channels into a dedicated compression thread, ensuring the disk is always saturated and never waiting for the CPU.
+### macOS Intel or Apple Silicon
 
-## 📄 License
-This project is licensed under the MIT License. See the `LICENSE` file for details.
+```sh
+curl -fsSL https://raw.githubusercontent.com/rahulhalder123-456/fc/master/install.sh | sh
+```
+
+The Unix installer uses `~/.local/bin`. If it is not already in PATH, the installer prints the exact command to add it.
+
+### Build from source
+
+Install a stable Rust toolchain, then run:
+
+```sh
+cargo install --git https://github.com/rahulhalder123-456/fc.git
+```
+
+## Usage
+
+```text
+fcz compress <INPUT> [--output <OUTPUT>]
+fcz decompress <INPUT> [--output <OUTPUT>]
+```
+
+Examples:
+
+```sh
+fcz compress "/path/with spaces/project"
+fcz compress data.bin --output data.bin.zst
+fcz decompress project.tar.zst --output restored-project
+fcz decompress data.bin.zst --output restored-data.bin
+```
+
+A directory named `project` defaults to `project.tar.zst`. Extracting that archive defaults to a new `project` directory. Choose another `--output` when the default already exists.
+
+## Benchmarking yourself
+
+The repository includes equivalent benchmark helpers. They preserve the input and refuse to overwrite an existing benchmark archive.
+
+```powershell
+.\scripts\benchmark.ps1 -InputDirectory "C:\path\to\folder"
+```
+
+```sh
+./scripts/benchmark.sh /path/to/folder
+```
+
+Each script reports input size, file/folder counts, elapsed time, archive size, approximate throughput, compression ratio, system information, and the output path.
+
+## Architecture
+
+For a directory, `fcz` walks and sorts entries for stable ordering, writes them to a tar stream, and sends that stream through the Zstandard encoder. Regular files are streamed instead of being loaded wholesale into memory. Zstandard uses the machine's available worker threads. A plain file skips tar and is written directly as a `.zst` stream.
+
+## Security
+
+Extraction occurs in a temporary sibling directory and is renamed into place only after success. Archive paths containing parent traversal, absolute roots, or Windows prefixes are rejected. Symbolic links, hard links, special entries, and duplicate paths are also rejected so an archive cannot redirect later writes outside the destination. Existing output files and directories are preserved.
+
+Please report vulnerabilities according to [SECURITY.md](SECURITY.md).
+
+## Supported platforms
+
+| Platform | Release asset |
+| --- | --- |
+| Windows x86_64 | `fcz-windows-x86_64.exe` |
+| Linux / WSL x86_64 | `fcz-linux-x86_64` |
+| macOS Intel | `fcz-macos-x86_64` |
+| macOS Apple Silicon | `fcz-macos-aarch64` |
+
+Only assets actually built for their named target are published. The release workflow can build all four when GitHub Actions is available; local manual release scripts are under `scripts/`.
+
+## Troubleshooting
+
+- **Output already exists:** use `--output` with a new path or move the existing output.
+- **Command not found after installation:** open a new terminal, or add `~/.local/bin` to PATH as printed by the installer.
+- **Release asset missing:** use the source installation fallback or wait for that platform asset to be published.
+- **Symbolic link rejected during compression:** archive the resolved target explicitly; links are excluded to keep cross-platform extraction predictable.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Changes should pass formatting, checks, tests, Clippy, and a release build.
+
+## Uninstallation
+
+```sh
+rm ~/.local/bin/fcz
+```
+
+```powershell
+Remove-Item "$HOME\.local\bin\fcz.exe"
+```
+
+## License
+
+Licensed under the [MIT License](LICENSE).
