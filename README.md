@@ -37,9 +37,8 @@ We tested `fc` on a massive enterprise monorepo containing over **30,000 files**
 Just like `uv`, `fc` can be installed in seconds. All you need is [Rust](https://rustup.rs/).
 
 ```bash
-cargo install --git https://github.com/YOUR_GITHUB_USERNAME/fc.git
+cargo install --git https://github.com/rahulhalder123-456/fc.git
 ```
-*(Make sure to replace `YOUR_GITHUB_USERNAME` with your actual username once you fork or host this!)*
 
 This compiles `fc` natively for your system and places the ultra-optimized binary straight into your `PATH`.
 
