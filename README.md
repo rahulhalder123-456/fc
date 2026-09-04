@@ -38,6 +38,10 @@ Output: `ty-backend.tar.zst`
 
 Using the reported 14.0 GB input size, this is approximately **288 MB/s**, a **13.1% archive-to-input ratio**, or an **86.9% size reduction**. These derived figures are approximate because the input size was rounded.
 
+### v1.0.1 validation run
+
+After the v1.0.1 correctness and memory-bounding changes, the same directory was measured again on September 4, 2026: 15,101,564,121 input bytes, 28,752 files, 4,497 folders, 71.01 seconds, and a 1,829,017,942-byte archive. The benchmark script reported approximately **202.82 MiB/s** and a **12.11% archive-to-input ratio**. This result is reported separately because it does not reproduce the earlier 48.63-second timing; no performance improvement is claimed.
+
 ### Methodology and limitations
 
 Record the `fcz` version, exact command, input byte count, item counts, archive byte count, and wall-clock duration. Results vary with CPU, SSD/storage speed, file count, file sizes, compressibility, filesystem, operating system, and compression level. No ZIP or 7-Zip comparison is claimed without running those tools against the same input under the same conditions.
