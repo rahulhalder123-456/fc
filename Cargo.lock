@@ -162,6 +162,7 @@ version = "1.0.5"
 dependencies = [
  "clap",
  "indicatif",
+ "libc",
  "tar",
  "walkdir",
  "zstd",

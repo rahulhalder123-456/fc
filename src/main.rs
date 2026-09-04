@@ -224,36 +224,6 @@ fn decompress(input: &Path, output: Option<&Path>, into: Option<&Path>) -> Resul
     Ok(())
 }
 
-struct SyncReader<R> {
-    inner: R,
-    bytes_since_sync: usize,
-}
-
-impl<R: Read> SyncReader<R> {
-    fn new(inner: R) -> Self {
-        Self {
-            inner,
-            bytes_since_sync: 0,
-        }
-    }
-}
-
-impl<R: Read> Read for SyncReader<R> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let n = self.inner.read(buf)?;
-        self.bytes_since_sync += n;
-        
-        #[cfg(target_os = "linux")]
-        if self.bytes_since_sync >= 64 * 1024 * 1024 {
-            let _ = std::process::Command::new("sync").status();
-            std::thread::sleep(Duration::from_millis(50));
-            self.bytes_since_sync = 0;
-        }
-        
-        Ok(n)
-    }
-}
-
 fn extract_archive_safely(input: &Path, output: &Path) -> Result<()> {
     let partial = partial_directory(output)?;
     fs::create_dir(&partial)?;
@@ -261,8 +231,7 @@ fn extract_archive_safely(input: &Path, output: &Path) -> Result<()> {
     let result = (|| -> Result<()> {
         let reader = BufReader::new(File::open(input)?);
         let decoder = zstd::stream::Decoder::new(reader)?;
-        let throttled_decoder = SyncReader::new(decoder);
-        let mut archive = tar::Archive::new(throttled_decoder);
+        let mut archive = tar::Archive::new(decoder);
         let mut seen = HashSet::new();
 
         let spinner = ProgressBar::new_spinner();
@@ -294,6 +263,18 @@ fn extract_archive_safely(input: &Path, output: &Path) -> Result<()> {
             }
             if !entry.unpack_in(&partial)? {
                 return Err(format!("unsafe archive path rejected: {}", relative.display()).into());
+            }
+            
+            // Fix WSL OOM: Tell Linux to immediately drop the extracted file from the page cache
+            #[cfg(target_os = "linux")]
+            if entry_type.is_file() {
+                let extracted_path = partial.join(&relative);
+                if let Ok(file) = File::open(&extracted_path) {
+                    use std::os::unix::io::AsRawFd;
+                    unsafe {
+                        libc::posix_fadvise(file.as_raw_fd(), 0, 0, libc::POSIX_FADV_DONTNEED);
+                    }
+                }
             }
             
             count += 1;
