@@ -28,13 +28,6 @@ One measured Windows test produced the following result. It represents one machi
 | Elapsed time | 48.63 seconds |
 | Output archive | 1,828,956,895 bytes (about 1.70 GiB) |
 
-Command used:
-
-```powershell
-fcz compress "C:\Users\Rahul Halder\Desktop\ty-backend"
-```
-
-Output: `ty-backend.tar.zst`
 
 Using the reported 14.0 GB input size, this is approximately **288 MB/s**, a **13.1% archive-to-input ratio**, or an **86.9% size reduction**. These derived figures are approximate because the input size was rounded.
 
