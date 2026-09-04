@@ -104,7 +104,6 @@ fn compress(input: &Path, output: Option<&Path>) -> Result<()> {
         let writer = BufWriter::new(output_file);
         let mut encoder = zstd::stream::Encoder::new(writer, 1)?;
         encoder.multithread(0)?;
-        encoder.long_distance_matching(true)?;
 
         if metadata.is_dir() {
             append_directory(&mut encoder, &input)?;
@@ -234,6 +233,16 @@ fn extract_archive_safely(input: &Path, output: &Path) -> Result<()> {
         let mut archive = tar::Archive::new(decoder);
         let mut seen = HashSet::new();
 
+        let spinner = ProgressBar::new_spinner();
+        spinner.set_style(
+            ProgressStyle::default_spinner()
+                .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ ")
+                .template("{spinner:.green} {msg}")?,
+        );
+        spinner.enable_steady_tick(Duration::from_millis(100));
+        spinner.set_message("Extracting files...");
+        let mut count = 0;
+
         for entry in archive.entries()? {
             let mut entry = entry?;
             let relative = entry.path()?.into_owned();
@@ -254,7 +263,17 @@ fn extract_archive_safely(input: &Path, output: &Path) -> Result<()> {
             if !entry.unpack_in(&partial)? {
                 return Err(format!("unsafe archive path rejected: {}", relative.display()).into());
             }
+            
+            count += 1;
+            if count % 100 == 0 {
+                spinner.set_message(format!("Extracted {count} items..."));
+            }
+            #[cfg(target_os = "linux")]
+            if count % 1000 == 0 {
+                let _ = std::process::Command::new("sync").status();
+            }
         }
+        spinner.finish_with_message(format!("Extraction complete ({count} items)"));
         Ok(())
     })();
 
