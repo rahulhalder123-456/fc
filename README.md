@@ -38,15 +38,15 @@ Just like `uv`, `fcz` can be installed natively from pre-compiled binaries in se
 
 **macOS and Linux:**
 ```bash
-curl -LsSf https://raw.githubusercontent.com/rahulhalder123-456/fcz/master/install.sh | sh
+curl -LsSf https://raw.githubusercontent.com/rahulhalder123-456/fc/master/install.sh | sh
 ```
 
 **Windows (PowerShell):**
 ```powershell
-powershell -c "irm https://raw.githubusercontent.com/rahulhalder123-456/fcz/master/install.ps1 | iex"
+powershell -c "irm https://raw.githubusercontent.com/rahulhalder123-456/fc/master/install.ps1 | iex"
 ```
 
-*(If you prefer to compile from source, you can still run `cargo install --git https://github.com/rahulhalder123-456/fcz.git`)*
+*(If you prefer to compile from source, you can still run `cargo install --git https://github.com/rahulhalder123-456/fc.git`)*
 
 ## 🛠️ Usage
 

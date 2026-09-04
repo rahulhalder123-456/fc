@@ -1,7 +1,7 @@
 #!/bin/sh
 set -e
 
-REPO="rahulhalder123-456/fcz"
+REPO="rahulhalder123-456/fc"
 
 echo "Installing fcz from GitHub Releases..."
 

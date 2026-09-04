@@ -1,6 +1,6 @@
 $ErrorActionPreference = "Stop"
 
-$Repo = "rahulhalder123-456/fcz"
+$Repo = "rahulhalder123-456/fc"
 $AssetName = "fcz-windows-x86_64.exe"
 
 Write-Host "Installing fcz from GitHub Releases..." -ForegroundColor Cyan
