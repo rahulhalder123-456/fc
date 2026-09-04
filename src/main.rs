@@ -227,6 +227,16 @@ fn decompress(input: &Path, output: Option<&Path>, into: Option<&Path>) -> Resul
 fn extract_archive_safely(input: &Path, output: &Path) -> Result<()> {
     let partial = partial_directory(output)?;
     fs::create_dir(&partial)?;
+
+    #[cfg(target_os = "linux")]
+    let (sync_tx, sync_rx) = std::sync::mpsc::channel();
+    #[cfg(target_os = "linux")]
+    let syncer = std::thread::spawn(move || {
+        while sync_rx.recv_timeout(Duration::from_secs(2)).is_err() {
+            let _ = std::process::Command::new("sync").status();
+        }
+    });
+
     let result = (|| -> Result<()> {
         let reader = BufReader::new(File::open(input)?);
         let decoder = zstd::stream::Decoder::new(reader)?;
@@ -268,14 +278,15 @@ fn extract_archive_safely(input: &Path, output: &Path) -> Result<()> {
             if count % 100 == 0 {
                 spinner.set_message(format!("Extracted {count} items..."));
             }
-            #[cfg(target_os = "linux")]
-            if count % 1000 == 0 {
-                let _ = std::process::Command::new("sync").status();
-            }
         }
         spinner.finish_with_message(format!("Extraction complete ({count} items)"));
         Ok(())
     })();
+
+    #[cfg(target_os = "linux")]
+    let _ = sync_tx.send(());
+    #[cfg(target_os = "linux")]
+    let _ = syncer.join();
 
     if let Err(error) = result {
         let _ = fs::remove_dir_all(&partial);
