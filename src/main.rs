@@ -30,12 +30,16 @@ enum Commands {
         output: Option<PathBuf>,
     },
     /// Decompress a .zst file or extract a .tar.zst archive
+    #[command(alias = "extract")]
     Decompress {
         /// Input archive
         input: PathBuf,
-        /// Output file or directory
+        /// Exact output file or directory (must not already exist)
         #[arg(short, long)]
         output: Option<PathBuf>,
+        /// Place the restored file/directory inside this chosen folder
+        #[arg(long, value_name = "DIRECTORY", conflicts_with = "output")]
+        into: Option<PathBuf>,
     },
 }
 
@@ -52,7 +56,11 @@ fn main() -> ExitCode {
 fn run(cli: Cli) -> Result<()> {
     match cli.command {
         Commands::Compress { input, output } => compress(&input, output.as_deref()),
-        Commands::Decompress { input, output } => decompress(&input, output.as_deref()),
+        Commands::Decompress {
+            input,
+            output,
+            into,
+        } => decompress(&input, output.as_deref(), into.as_deref()),
     }
 }
 
@@ -172,7 +180,7 @@ fn append_directory<W: Write>(
     Ok(())
 }
 
-fn decompress(input: &Path, output: Option<&Path>) -> Result<()> {
+fn decompress(input: &Path, output: Option<&Path>, into: Option<&Path>) -> Result<()> {
     let input = fs::canonicalize(input)
         .map_err(|error| format!("cannot access archive '{}': {error}", input.display()))?;
     if !fs::metadata(&input)?.is_file() {
@@ -182,11 +190,7 @@ fn decompress(input: &Path, output: Option<&Path>) -> Result<()> {
     let is_tar = input
         .file_name()
         .is_some_and(|name| name.to_string_lossy().ends_with(".tar.zst"));
-    let output_path = absolute_output_path(
-        output
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| default_decompressed_path(&input, is_tar)),
-    )?;
+    let output_path = decompression_output_path(&input, is_tar, output, into)?;
     refuse_existing_output(&output_path)?;
     println!(
         "Decompressing: {} -> {}",
@@ -326,6 +330,32 @@ fn default_decompressed_path(input: &Path, is_tar: bool) -> PathBuf {
     path
 }
 
+fn decompression_output_path(
+    input: &Path,
+    is_tar: bool,
+    output: Option<&Path>,
+    into: Option<&Path>,
+) -> Result<PathBuf> {
+    if let Some(output) = output {
+        return absolute_output_path(output.to_path_buf());
+    }
+
+    let default = default_decompressed_path(input, is_tar);
+    if let Some(directory) = into {
+        let directory = absolute_output_path(directory.to_path_buf())?;
+        if directory.exists() && !directory.is_dir() {
+            return Err(format!(
+                "chosen destination is not a directory: {}",
+                directory.display()
+            )
+            .into());
+        }
+        fs::create_dir_all(&directory)?;
+        return Ok(directory.join(default.file_name().unwrap_or_default()));
+    }
+    absolute_output_path(default)
+}
+
 fn partial_directory(output: &Path) -> Result<PathBuf> {
     let parent = output.parent().unwrap_or_else(|| Path::new("."));
     let name = output.file_name().unwrap_or_default().to_string_lossy();
@@ -394,7 +424,7 @@ mod tests {
         let restored = root.join("restored output");
 
         compress(&source, Some(&archive)).unwrap();
-        decompress(&archive, Some(&restored)).unwrap();
+        decompress(&archive, Some(&restored), None).unwrap();
         assert_trees_equal(&source, &restored);
         fs::remove_dir_all(root).unwrap();
     }
@@ -412,7 +442,7 @@ mod tests {
         )
         .unwrap();
         compress(&source, Some(&archive)).unwrap();
-        decompress(&archive, Some(&restored)).unwrap();
+        decompress(&archive, Some(&restored), None).unwrap();
         assert_eq!(fs::read(source).unwrap(), fs::read(restored).unwrap());
         fs::remove_dir_all(root).unwrap();
     }
@@ -468,8 +498,33 @@ mod tests {
         let encoder = archive.into_inner().unwrap();
         encoder.finish().unwrap();
         let output = root.join("output");
-        assert!(decompress(&archive_path, Some(&output)).is_err());
+        assert!(decompress(&archive_path, Some(&output), None).is_err());
         assert!(!output.exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn extracts_inside_an_existing_chosen_folder() {
+        let root = test_dir("chosen-folder");
+        let source = root.join("source");
+        let chosen = root.join("any folder with spaces");
+        fs::create_dir_all(&source).unwrap();
+        fs::create_dir_all(&chosen).unwrap();
+        fs::write(chosen.join("keep-existing.txt"), b"untouched").unwrap();
+        fs::write(source.join("hello.txt"), b"hello").unwrap();
+        let archive = root.join("my-backup.tar.zst");
+
+        compress(&source, Some(&archive)).unwrap();
+        decompress(&archive, None, Some(&chosen)).unwrap();
+
+        assert_eq!(
+            fs::read(chosen.join("my-backup/hello.txt")).unwrap(),
+            b"hello"
+        );
+        assert_eq!(
+            fs::read(chosen.join("keep-existing.txt")).unwrap(),
+            b"untouched"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 }

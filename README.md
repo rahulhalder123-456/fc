@@ -84,7 +84,7 @@ cargo install --git https://github.com/rahulhalder123-456/fc.git
 
 ```text
 fcz compress <INPUT> [--output <OUTPUT>]
-fcz decompress <INPUT> [--output <OUTPUT>]
+fcz decompress <INPUT> [--output <OUTPUT> | --into <DIRECTORY>]
 ```
 
 Examples:
@@ -93,10 +93,11 @@ Examples:
 fcz compress "/path/with spaces/project"
 fcz compress data.bin --output data.bin.zst
 fcz decompress project.tar.zst --output restored-project
+fcz decompress project.tar.zst --into "/another/existing folder"
 fcz decompress data.bin.zst --output restored-data.bin
 ```
 
-A directory named `project` defaults to `project.tar.zst`. Extracting that archive defaults to a new `project` directory. Choose another `--output` when the default already exists.
+A directory named `project` defaults to `project.tar.zst`. Extracting that archive defaults to a new `project` directory. Use `--output` to set the exact new output path, or `--into` to select any existing parent folder. For example, `fcz decompress project.tar.zst --into "D:\My Backups"` creates `D:\My Backups\project`. The created destination must be new, so unrelated existing files are never overwritten.
 
 ## Benchmarking yourself
 
