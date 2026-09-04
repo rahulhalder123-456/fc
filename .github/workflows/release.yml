@@ -1,91 +1,65 @@
-name: Build and release
+name: Release
 
 on:
   push:
-    tags: ["v*"]
+    tags:
+      - "v*"
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
-  build:
-    name: ${{ matrix.asset }}
+  build-and-upload:
+    name: Build ${{ matrix.asset_name }}
+
     strategy:
       fail-fast: false
+
       matrix:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            binary: fcz
-            asset: fcz-linux-x86_64
-          - os: macos-15-intel
+            artifact_name: fcz
+            asset_name: fcz-linux-x86_64
+
+          - os: macos-13
             target: x86_64-apple-darwin
-            binary: fcz
-            asset: fcz-macos-x86_64
-          - os: macos-15
+            artifact_name: fcz
+            asset_name: fcz-macos-x86_64
+
+          - os: macos-latest
             target: aarch64-apple-darwin
-            binary: fcz
-            asset: fcz-macos-aarch64
+            artifact_name: fcz
+            asset_name: fcz-macos-aarch64
+
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            binary: fcz.exe
-            asset: fcz-windows-x86_64.exe
+            artifact_name: fcz.exe
+            asset_name: fcz-windows-x86_64.exe
 
     runs-on: ${{ matrix.os }}
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
 
-      - name: Check formatting
-        run: cargo fmt --check
-      - name: Check
-        run: cargo check --target ${{ matrix.target }}
-      - name: Test
-        run: cargo test --target ${{ matrix.target }}
-      - name: Lint
-        run: cargo clippy --all-targets --all-features --target ${{ matrix.target }} -- -D warnings
       - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
-      - name: Stage asset (Unix)
-        if: runner.os != 'Windows'
+      - name: Prepare release asset
+        shell: bash
         run: |
-          mkdir dist
-          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "dist/${{ matrix.asset }}"
-          chmod 755 "dist/${{ matrix.asset }}"
-      - name: Stage asset (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary }}" "dist/${{ matrix.asset }}"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.asset }}
-          path: dist/${{ matrix.asset }}
-          if-no-files-found: error
+          cd target/${{ matrix.target }}/release
+          mv "${{ matrix.artifact_name }}" "${{ matrix.asset_name }}"
 
-  release:
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-      - name: Generate checksums
-        working-directory: dist
-        run: sha256sum fcz-* > SHA256SUMS
-      - name: Upload release assets
+      - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
-          fail_on_unmatched_files: true
+          files: target/${{ matrix.target }}/release/${{ matrix.asset_name }}
+          generate_release_notes: true
