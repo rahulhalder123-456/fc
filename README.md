@@ -34,20 +34,19 @@ We tested `fc` on a massive enterprise monorepo containing over **30,000 files**
 
 ## 📦 Installation
 
-### Method 1: Pre-compiled Binary (No Rust Required!)
-If you don't have Rust or Cargo installed, you can simply download the pre-compiled standalone executable:
-1. Go to the [Releases Page](https://github.com/rahulhalder123-456/fc/releases).
-2. Download the `fc.exe` (Windows) or `fc` (macOS/Linux) binary for your system.
-3. Place it in a folder that is in your system's `PATH`.
+Just like `uv`, `fc` can be installed natively from pre-compiled binaries in seconds without needing Rust!
 
-### Method 2: Install via Cargo (Recommended for Developers)
-Just like `uv`, `fc` can be installed natively from source in seconds. All you need is [Rust](https://rustup.rs/).
-
+**macOS and Linux:**
 ```bash
-cargo install --git https://github.com/rahulhalder123-456/fc.git
+curl -LsSf https://raw.githubusercontent.com/rahulhalder123-456/fc/master/install.sh | sh
 ```
 
-This compiles `fc` natively for your system and places the ultra-optimized binary straight into your `PATH`.
+**Windows (PowerShell):**
+```powershell
+powershell -c "irm https://raw.githubusercontent.com/rahulhalder123-456/fc/master/install.ps1 | iex"
+```
+
+*(If you prefer to compile from source, you can still run `cargo install --git https://github.com/rahulhalder123-456/fc.git`)*
 
 ## 🛠️ Usage
 

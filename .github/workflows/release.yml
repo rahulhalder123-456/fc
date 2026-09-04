@@ -1,0 +1,55 @@
+name: Release
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  build-and-upload:
+    name: Build and Upload Release Asset
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: fc
+            asset_name: fc-linux-x86_64
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact_name: fc
+            asset_name: fc-macos-x86_64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact_name: fc
+            asset_name: fc-macos-aarch64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: fc.exe
+            asset_name: fc-windows-x86_64.exe
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build project
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Rename Binary
+        shell: bash
+        run: |
+          cd target/${{ matrix.target }}/release
+          mv ${{ matrix.artifact_name }} ${{ matrix.asset_name }}
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: target/${{ matrix.target }}/release/${{ matrix.asset_name }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
