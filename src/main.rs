@@ -224,6 +224,63 @@ fn decompress(input: &Path, output: Option<&Path>, into: Option<&Path>) -> Resul
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
+fn get_available_memory_mb() -> Option<usize> {
+    use std::io::BufRead;
+    if let Ok(file) = File::open("/proc/meminfo") {
+        let reader = BufReader::new(file);
+        for line in reader.lines().flatten() {
+            if line.starts_with("MemAvailable:") {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    if let Ok(kb) = parts[1].parse::<usize>() {
+                        return Some(kb / 1024);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+struct AdaptiveReader<R> {
+    inner: R,
+    bytes_since_check: usize,
+    check_interval: usize,
+}
+
+impl<R: Read> AdaptiveReader<R> {
+    fn new(inner: R) -> Self {
+        Self {
+            inner,
+            bytes_since_check: 0,
+            check_interval: 16 * 1024 * 1024, // Check every 16 MB
+        }
+    }
+}
+
+impl<R: Read> Read for AdaptiveReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        let n = self.inner.read(buf)?;
+        self.bytes_since_check += n;
+        
+        #[cfg(target_os = "linux")]
+        if self.bytes_since_check >= self.check_interval {
+            self.bytes_since_check = 0;
+            if let Some(avail_mb) = get_available_memory_mb() {
+                // If less than 1GB RAM is available, we are on a low-end system
+                // or under extreme memory pressure. Throttle down!
+                if avail_mb < 1024 {
+                    let _ = std::process::Command::new("sync").status();
+                    std::thread::sleep(Duration::from_millis(250));
+                }
+            }
+        }
+        
+        Ok(n)
+    }
+}
+
 fn extract_archive_safely(input: &Path, output: &Path) -> Result<()> {
     let partial = partial_directory(output)?;
     fs::create_dir(&partial)?;
@@ -231,7 +288,8 @@ fn extract_archive_safely(input: &Path, output: &Path) -> Result<()> {
     let result = (|| -> Result<()> {
         let reader = BufReader::new(File::open(input)?);
         let decoder = zstd::stream::Decoder::new(reader)?;
-        let mut archive = tar::Archive::new(decoder);
+        let adaptive_decoder = AdaptiveReader::new(decoder);
+        let mut archive = tar::Archive::new(adaptive_decoder);
         let mut seen = HashSet::new();
 
         let spinner = ProgressBar::new_spinner();
