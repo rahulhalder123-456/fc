@@ -13,20 +13,20 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact_name: fc
-            asset_name: fc-linux-x86_64
+            artifact_name: fcz
+            asset_name: fcz-linux-x86_64
           - os: macos-latest
             target: x86_64-apple-darwin
-            artifact_name: fc
-            asset_name: fc-macos-x86_64
+            artifact_name: fcz
+            asset_name: fcz-macos-x86_64
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact_name: fc
-            asset_name: fc-macos-aarch64
+            artifact_name: fcz
+            asset_name: fcz-macos-aarch64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact_name: fc.exe
-            asset_name: fc-windows-x86_64.exe
+            artifact_name: fcz.exe
+            asset_name: fcz-windows-x86_64.exe
 
     steps:
       - name: Checkout code

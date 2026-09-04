@@ -1,20 +1,20 @@
 #!/bin/sh
 set -e
 
-REPO="rahulhalder123-456/fc"
+REPO="rahulhalder123-456/fcz"
 
-echo "Installing fc from GitHub Releases..."
+echo "Installing fcz from GitHub Releases..."
 
 # Detect OS and Architecture
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 
 if [ "$OS" = "Linux" ] && [ "$ARCH" = "x86_64" ]; then
-    ASSET="fc-linux-x86_64"
+    ASSET="fcz-linux-x86_64"
 elif [ "$OS" = "Darwin" ] && [ "$ARCH" = "x86_64" ]; then
-    ASSET="fc-macos-x86_64"
+    ASSET="fcz-macos-x86_64"
 elif [ "$OS" = "Darwin" ] && [ "$ARCH" = "arm64" ]; then
-    ASSET="fc-macos-aarch64"
+    ASSET="fcz-macos-aarch64"
 else
     echo "Unsupported OS or Architecture: $OS $ARCH"
     echo "Please install via cargo: cargo install --git https://github.com/$REPO.git"
@@ -31,8 +31,8 @@ fi
 
 # Download to a temporary location
 TMP_DIR=$(mktemp -d)
-curl -L "$LATEST_RELEASE_URL" -o "$TMP_DIR/fc"
-chmod +x "$TMP_DIR/fc"
+curl -L "$LATEST_RELEASE_URL" -o "$TMP_DIR/fcz"
+chmod +x "$TMP_DIR/fcz"
 
 # Install to ~/.cargo/bin or /usr/local/bin
 INSTALL_DIR="$HOME/.cargo/bin"
@@ -40,12 +40,12 @@ if [ ! -d "$INSTALL_DIR" ]; then
     INSTALL_DIR="/usr/local/bin"
     if [ ! -w "$INSTALL_DIR" ]; then
         echo "Requires sudo to install to /usr/local/bin"
-        sudo mv "$TMP_DIR/fc" "$INSTALL_DIR/fc"
-        echo "fc has been installed to $INSTALL_DIR/fc"
+        sudo mv "$TMP_DIR/fcz" "$INSTALL_DIR/fcz"
+        echo "fcz has been installed to $INSTALL_DIR/fcz"
         exit 0
     fi
 fi
 
-mv "$TMP_DIR/fc" "$INSTALL_DIR/fc"
-echo "fc has been successfully installed to $INSTALL_DIR/fc!"
+mv "$TMP_DIR/fcz" "$INSTALL_DIR/fcz"
+echo "fcz has been successfully installed to $INSTALL_DIR/fcz!"
 echo "Make sure $INSTALL_DIR is in your PATH."

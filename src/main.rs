@@ -19,7 +19,6 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Compress a file or directory
-    #[command(alias = "compose")]
     Compress {
         /// Path to the input file or directory
         input: PathBuf,

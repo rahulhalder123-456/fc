@@ -1,9 +1,9 @@
 $ErrorActionPreference = "Stop"
 
-$Repo = "rahulhalder123-456/fc"
-$AssetName = "fc-windows-x86_64.exe"
+$Repo = "rahulhalder123-456/fcz"
+$AssetName = "fcz-windows-x86_64.exe"
 
-Write-Host "Installing fc from GitHub Releases..." -ForegroundColor Cyan
+Write-Host "Installing fcz from GitHub Releases..." -ForegroundColor Cyan
 
 # Fetch latest release URL
 $ApiUrl = "https://api.github.com/repos/$Repo/releases/latest"
@@ -26,10 +26,10 @@ if (-not (Test-Path -Path $InstallDir)) {
     New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
 }
 
-$ExePath = Join-Path $InstallDir "fc.exe"
+$ExePath = Join-Path $InstallDir "fcz.exe"
 
 Write-Host "Downloading $AssetUrl to $ExePath..."
 Invoke-WebRequest -Uri $AssetUrl -OutFile $ExePath
 
-Write-Host "fc has been successfully installed to $ExePath!" -ForegroundColor Green
+Write-Host "fcz has been successfully installed to $ExePath!" -ForegroundColor Green
 Write-Host "Make sure $InstallDir is in your PATH." -ForegroundColor Yellow
