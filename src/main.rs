@@ -499,12 +499,23 @@ mod tests {
         let source = root.join("source with spaces");
         fs::create_dir_all(source.join("nested/empty-dir")).unwrap();
         fs::write(source.join("empty.txt"), []).unwrap();
+        fs::write(source.join("1-byte.txt"), b"a").unwrap();
+        fs::write(source.join(".hidden_file"), b"hidden").unwrap();
         fs::write(source.join("nested/hello.txt"), b"hello\0world").unwrap();
         fs::write(
             source.join("nested/こんにちは.txt"),
             "Unicode contents".as_bytes(),
         )
         .unwrap();
+        fs::write(
+            source.join("nested/🍎.txt"),
+            "Emoji contents".as_bytes(),
+        )
+        .unwrap();
+        
+        let very_long_name = "a".repeat(200);
+        fs::write(source.join(&very_long_name), b"long name").unwrap();
+        
         fs::write(source.join("large-ish.bin"), vec![0xA5; 2 * 1024 * 1024]).unwrap();
         let archive = root.join("archive.tar.zst");
         let restored = root.join("restored output");
@@ -530,6 +541,29 @@ mod tests {
         compress(&source, Some(&archive)).unwrap();
         decompress(&archive, Some(&restored), None).unwrap();
         assert_eq!(fs::read(source).unwrap(), fs::read(restored).unwrap());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn large_file_round_trip() {
+        let root = test_dir("large-file");
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("1gb_file.bin");
+        let archive = root.join("1gb_data.zst");
+        let restored = root.join("1gb_restored.bin");
+        
+        // Write 1GB of zeros (highly compressible, so it's fast)
+        let mut file = File::create(&source).unwrap();
+        let chunk = vec![0u8; 1024 * 1024]; // 1MB chunk
+        for _ in 0..1024 {
+            file.write_all(&chunk).unwrap();
+        }
+        file.flush().unwrap();
+        
+        compress(&source, Some(&archive)).unwrap();
+        decompress(&archive, Some(&restored), None).unwrap();
+        
+        assert_eq!(fs::metadata(&source).unwrap().len(), fs::metadata(&restored).unwrap().len());
         fs::remove_dir_all(root).unwrap();
     }
 
